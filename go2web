@@ -4,6 +4,7 @@ import json
 import socket
 import ssl
 import sys
+from pathlib import Path
 from html import unescape
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Tuple
@@ -279,16 +280,51 @@ def search_top_10(term: str) -> List[Tuple[str, str]]:
     return unique
 
 
+def take_fullpage_screenshot(url: str, output_path: str, timeout_ms: int = 30000) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Screenshot mode supports only http:// and https:// URLs")
+
+    try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise RuntimeError(
+            "Screenshot feature requires Playwright. Install with: pip install playwright && playwright install chromium"
+        ) from exc
+
+    target = Path(output_path).expanduser().resolve()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        try:
+            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+        except PlaywrightTimeoutError:
+            page.goto(url, wait_until="load", timeout=timeout_ms)
+        page.screenshot(path=str(target), full_page=True)
+        browser.close()
+
+    return str(target)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="go2web",
-        description="HTTP over TCP sockets: fetch URLs and search the web.",
+        description="HTTP over TCP sockets: fetch URLs, search the web, and capture full-page screenshots.",
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("-u", "--url", help="Make an HTTP request to URL and print human-readable response")
     group.add_argument("-s", "--search", nargs="+", help="Search term (single word or multiple words)")
+    group.add_argument("-p", "--screenshot", help="Capture a full-page screenshot of URL")
     group.add_argument("-v", "--version", action="store_true", help="Show version")
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="screenshot.png",
+        help="Output file path for screenshot mode (default: screenshot.png)",
+    )
 
     return parser
 
@@ -322,6 +358,11 @@ def main() -> int:
             for idx, (title, link) in enumerate(results, start=1):
                 print(f"{idx}. {title}")
                 print(f"   {link}")
+            return 0
+
+        if args.screenshot:
+            saved_to = take_fullpage_screenshot(args.screenshot, args.output)
+            print(f"Saved full-page screenshot to: {saved_to}")
             return 0
 
     except Exception as exc:

@@ -6,6 +6,7 @@ Command-line tool `go2web` that performs HTTP/HTTPS requests using raw TCP socke
 
 - `go2web -u <URL>`: sends a GET request and prints a human-readable response
 - `go2web -s <search-term>`: searches via DuckDuckGo Lite and prints top 10 results
+- `go2web -p <URL> -o <file.png>`: captures a full-page screenshot of a webpage
 - `go2web -h`: shows help
 - Redirect handling (`301`, `302`, `303`, `307`, `308`)
 
@@ -23,6 +24,16 @@ chmod +x go2web
 ./go2web -h
 ./go2web -u "https://utm.md/en/"
 ./go2web -s "technical university moldova"
+./go2web -p "https://utm.md/en/" -o "utm-fullpage.png"
+```
+
+## Screenshot Mode Setup
+
+Screenshot mode requires Playwright and Chromium.
+
+```bash
+pip install playwright
+playwright install chromium
 ```
 
 ## Implementation Notes
