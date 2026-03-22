@@ -7,6 +7,7 @@ Command-line tool `go2web` that performs HTTP/HTTPS requests using raw TCP socke
 - `go2web -u <URL>`: sends a GET request and prints a human-readable response
 - `go2web -s <search-term>`: searches via DuckDuckGo Lite and prints top 10 results
 - `go2web -p <URL> -o <file.png>`: captures a full-page screenshot of a webpage
+- URL mode cache with TTL (`--cache-ttl`, `--no-cache`)
 - `go2web -h`: shows help
 - Redirect handling (`301`, `302`, `303`, `307`, `308`)
 
@@ -23,9 +24,18 @@ Command-line tool `go2web` that performs HTTP/HTTPS requests using raw TCP socke
 chmod +x go2web
 ./go2web -h
 ./go2web -u "https://utm.md/en/"
+./go2web -u "https://utm.md/en/" --cache-ttl 300
+./go2web -u "https://utm.md/en/" --no-cache
 ./go2web -s "technical university moldova"
 ./go2web -p "https://utm.md/en/" -o "utm-fullpage.png"
 ```
+
+## Cache
+
+- Cache file: `~/.cache/go2web/http_cache.json`
+- Applies to URL mode (`-u`)
+- Default TTL: 120 seconds
+- Cache status is printed as `HIT`, `MISS`, or `BYPASS`
 
 ## Screenshot Mode Setup
 
@@ -44,14 +54,6 @@ playwright install chromium
 - HTTP response parsing: custom parser (status line, headers, body)
 - Chunked transfer decoding: custom implementation
 - Human-readable HTML: custom `HTMLParser`-based text extraction
-
-## Demo GIF
-
-Add your terminal recording GIF here for submission, for example:
-
-```md
-![go2web demo](./assets/go2web-demo.gif)
-```
 
 ## Suggested Commit History
 
