@@ -6,8 +6,8 @@ import ssl
 import sys
 from html import unescape
 from html.parser import HTMLParser
-from typing import Dict, List, Tuple
-from urllib.parse import urljoin, urlparse
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 
 class TextExtractor(HTMLParser):
@@ -17,14 +17,14 @@ class TextExtractor(HTMLParser):
         self._skip_depth = 0
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in {'script', 'style'}:
+        if tag in {"script", "style"}:
             self._skip_depth += 1
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in {'script', 'style'} and self._skip_depth > 0:
+        if tag in {"script", "style"} and self._skip_depth > 0:
             self._skip_depth -= 1
-        if tag in {'p', 'div', 'br', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}:
-            self._chunks.append('\n')
+        if tag in {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._chunks.append("\n")
 
     def handle_data(self, data: str) -> None:
         if self._skip_depth == 0:
@@ -33,9 +33,9 @@ class TextExtractor(HTMLParser):
                 self._chunks.append(text)
 
     def get_text(self) -> str:
-        text = ' '.join(self._chunks)
-        lines = [' '.join(line.split()) for line in text.split('\n')]
-        return '\n'.join(line for line in lines if line).strip()
+        text = " ".join(self._chunks)
+        lines = [" ".join(line.split()) for line in text.split("\n")]
+        return "\n".join(line for line in lines if line).strip()
 
 
 class HttpResponse:
@@ -46,16 +46,64 @@ class HttpResponse:
         self.body = body
 
 
+class DuckDuckGoLiteParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._in_link = False
+        self._href: Optional[str] = None
+        self._title_parts: List[str] = []
+        self.results: List[Tuple[str, str]] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag != "a":
+            return
+
+        attr_map = dict(attrs)
+        href = attr_map.get("href", "")
+        if not href:
+            return
+
+        self._in_link = True
+        self._href = href
+        self._title_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._in_link:
+            text = data.strip()
+            if text:
+                self._title_parts.append(text)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "a" or not self._in_link or not self._href:
+            return
+
+        title = " ".join(self._title_parts).strip()
+        href = self._href.strip()
+
+        parsed = urlparse(href)
+        if parsed.path == "/l/":
+            uddg = parse_qs(parsed.query).get("uddg", [None])[0]
+            if uddg:
+                href = uddg
+
+        if title and href.startswith(("http://", "https://")):
+            self.results.append((title, href))
+
+        self._in_link = False
+        self._href = None
+        self._title_parts = []
+
+
 def _decode_chunked(data: bytes) -> bytes:
     idx = 0
     out = bytearray()
 
     while True:
-        line_end = data.find(b'\r\n', idx)
+        line_end = data.find(b"\r\n", idx)
         if line_end == -1:
             break
 
-        size_line = data[idx:line_end].split(b';', 1)[0]
+        size_line = data[idx:line_end].split(b";", 1)[0]
         try:
             size = int(size_line, 16)
         except ValueError:
@@ -72,34 +120,34 @@ def _decode_chunked(data: bytes) -> bytes:
 
 
 def _parse_http_response(raw: bytes) -> HttpResponse:
-    split_at = raw.find(b'\r\n\r\n')
+    split_at = raw.find(b"\r\n\r\n")
     if split_at == -1:
-        raise ValueError('Invalid HTTP response: missing header/body separator')
+        raise ValueError("Invalid HTTP response: missing header/body separator")
 
-    header_blob = raw[:split_at].decode('iso-8859-1', errors='replace')
+    header_blob = raw[:split_at].decode("iso-8859-1", errors="replace")
     body = raw[split_at + 4:]
 
-    header_lines = header_blob.split('\r\n')
+    header_lines = header_blob.split("\r\n")
     status_line = header_lines[0]
-    parts = status_line.split(' ', 2)
+    parts = status_line.split(" ", 2)
     if len(parts) < 2:
-        raise ValueError(f'Invalid HTTP status line: {status_line}')
+        raise ValueError(f"Invalid HTTP status line: {status_line}")
 
     status_code = int(parts[1])
-    reason = parts[2] if len(parts) > 2 else ''
+    reason = parts[2] if len(parts) > 2 else ""
 
     headers: Dict[str, str] = {}
     for line in header_lines[1:]:
-        if ':' not in line:
+        if ":" not in line:
             continue
-        name, value = line.split(':', 1)
+        name, value = line.split(":", 1)
         headers[name.strip().lower()] = value.strip()
 
-    if headers.get('transfer-encoding', '').lower() == 'chunked':
+    if headers.get("transfer-encoding", "").lower() == "chunked":
         body = _decode_chunked(body)
 
-    content_length = headers.get('content-length')
-    if content_length and content_length.isdigit() and headers.get('transfer-encoding', '').lower() != 'chunked':
+    content_length = headers.get("content-length")
+    if content_length and content_length.isdigit() and headers.get("transfer-encoding", "").lower() != "chunked":
         body = body[:int(content_length)]
 
     return HttpResponse(status_code=status_code, reason=reason, headers=headers, body=body)
@@ -123,7 +171,7 @@ def _open_connection(host: str, port: int, use_tls: bool):
 
     if errors:
         raise errors[-1]
-    raise ConnectionError(f'Unable to connect to {host}:{port}')
+    raise ConnectionError(f"Unable to connect to {host}:{port}")
 
 
 def http_get(url: str, max_redirects: int = 5) -> Tuple[str, HttpResponse]:
@@ -131,28 +179,28 @@ def http_get(url: str, max_redirects: int = 5) -> Tuple[str, HttpResponse]:
 
     for _ in range(max_redirects + 1):
         parsed = urlparse(current_url)
-        if parsed.scheme not in {'http', 'https'}:
-            raise ValueError('Only http:// and https:// URLs are supported')
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("Only http:// and https:// URLs are supported")
 
         host = parsed.hostname
         if not host:
-            raise ValueError('Invalid URL: missing host')
+            raise ValueError("Invalid URL: missing host")
 
-        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-        path = parsed.path or '/'
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        path = parsed.path or "/"
         if parsed.query:
-            path = f'{path}?{parsed.query}'
+            path = f"{path}?{parsed.query}"
 
         request = (
-            f'GET {path} HTTP/1.1\r\n'
-            f'Host: {host}\r\n'
-            'User-Agent: go2web/1.0\r\n'
-            'Accept: text/html,application/json;q=0.9,*/*;q=0.8\r\n'
-            'Accept-Encoding: identity\r\n'
-            'Connection: close\r\n\r\n'
-        ).encode('ascii')
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            "User-Agent: go2web/1.0\r\n"
+            "Accept: text/html,application/json;q=0.9,*/*;q=0.8\r\n"
+            "Accept-Encoding: identity\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("ascii")
 
-        with _open_connection(host, port, parsed.scheme == 'https') as conn:
+        with _open_connection(host, port, parsed.scheme == "https") as conn:
             conn.sendall(request)
             chunks = []
             while True:
@@ -161,10 +209,10 @@ def http_get(url: str, max_redirects: int = 5) -> Tuple[str, HttpResponse]:
                     break
                 chunks.append(data)
 
-        response = _parse_http_response(b''.join(chunks))
+        response = _parse_http_response(b"".join(chunks))
 
         if response.status_code in {301, 302, 303, 307, 308}:
-            location = response.headers.get('location')
+            location = response.headers.get("location")
             if not location:
                 return current_url, response
             current_url = urljoin(current_url, location)
@@ -172,32 +220,32 @@ def http_get(url: str, max_redirects: int = 5) -> Tuple[str, HttpResponse]:
 
         return current_url, response
 
-    raise RuntimeError('Too many redirects')
+    raise RuntimeError("Too many redirects")
 
 
 def decode_body(response: HttpResponse) -> str:
-    content_type = response.headers.get('content-type', '')
-    charset = 'utf-8'
-    if 'charset=' in content_type:
-        charset = content_type.split('charset=', 1)[1].split(';', 1)[0].strip()
+    content_type = response.headers.get("content-type", "")
+    charset = "utf-8"
+    if "charset=" in content_type:
+        charset = content_type.split("charset=", 1)[1].split(";", 1)[0].strip()
 
     try:
-        return response.body.decode(charset, errors='replace')
+        return response.body.decode(charset, errors="replace")
     except LookupError:
-        return response.body.decode('utf-8', errors='replace')
+        return response.body.decode("utf-8", errors="replace")
 
 
 def human_readable_output(response: HttpResponse) -> str:
-    content_type = response.headers.get('content-type', '').lower()
+    content_type = response.headers.get("content-type", "").lower()
     text = decode_body(response)
 
-    if 'application/json' in content_type:
+    if "application/json" in content_type:
         try:
             return json.dumps(json.loads(text), indent=2, ensure_ascii=False)
         except json.JSONDecodeError:
             return text
 
-    if 'text/html' in content_type or 'application/xhtml+xml' in content_type:
+    if "text/html" in content_type or "application/xhtml+xml" in content_type:
         parser = TextExtractor()
         parser.feed(text)
         parser.close()
@@ -206,16 +254,41 @@ def human_readable_output(response: HttpResponse) -> str:
     return text
 
 
+def search_top_10(term: str) -> List[Tuple[str, str]]:
+    search_url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(term)}"
+    _, response = http_get(search_url)
+    if response.status_code != 200:
+        raise RuntimeError(f"Search request failed with status {response.status_code}")
+
+    parser = DuckDuckGoLiteParser()
+    parser.feed(decode_body(response))
+    parser.close()
+
+    results = parser.results
+    unique: List[Tuple[str, str]] = []
+    seen = set()
+    for title, link in results:
+        if link in seen:
+            continue
+
+        seen.add(link)
+        unique.append((title.strip(), link.strip()))
+        if len(unique) == 10:
+            break
+
+    return unique
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog='go2web',
-        description='HTTP over TCP sockets: fetch URLs and search the web.',
+        prog="go2web",
+        description="HTTP over TCP sockets: fetch URLs and search the web.",
     )
 
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-u', '--url', help='Make an HTTP request to URL and print human-readable response')
-    group.add_argument('-s', '--search', nargs='+', help='Search term (single word or multiple words)')
-    group.add_argument('-v', '--version', action='store_true', help='Show version')
+    group.add_argument("-u", "--url", help="Make an HTTP request to URL and print human-readable response")
+    group.add_argument("-s", "--search", nargs="+", help="Search term (single word or multiple words)")
+    group.add_argument("-v", "--version", action="store_true", help="Show version")
 
     return parser
 
@@ -225,29 +298,39 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.version:
-        print('go2web 1.0.0')
+        print("go2web 1.0.0")
         return 0
 
     try:
         if args.url:
             final_url, response = http_get(args.url)
-            print(f'URL: {final_url}')
-            print(f'Status: {response.status_code} {response.reason}'.strip())
-            print('=' * 80)
+            print(f"URL: {final_url}")
+            print(f"Status: {response.status_code} {response.reason}".strip())
+            print("=" * 80)
             print(human_readable_output(response))
             return 0
 
         if args.search:
-            print('Search mode is not implemented yet.', file=sys.stderr)
-            return 1
+            term = " ".join(args.search)
+            results = search_top_10(term)
+            print(f"Search query: {term}")
+            print("=" * 80)
+            if not results:
+                print("No results found.")
+                return 0
+
+            for idx, (title, link) in enumerate(results, start=1):
+                print(f"{idx}. {title}")
+                print(f"   {link}")
+            return 0
 
     except Exception as exc:
-        print(f'Error: {exc}', file=sys.stderr)
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     parser.print_help()
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     raise SystemExit(main())
